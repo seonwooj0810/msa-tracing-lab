@@ -15,9 +15,9 @@ def require(condition, message):
         raise AssertionError(message)
 
 
-def get_json(url, headers=None):
+def get_json(url, headers=None, timeout=8):
     try:
-        with urlopen(Request(url, headers=headers or {}), timeout=8) as response:
+        with urlopen(Request(url, headers=headers or {}), timeout=timeout) as response:
             return response.status, json.load(response)
     except HTTPError as error:
         return error.code, json.load(error)
@@ -36,16 +36,22 @@ def parent(span):
 def wait_for_trace(base_url, trace_id, count):
     deadline = time.monotonic() + 30
     last = "not indexed yet"
-    while time.monotonic() < deadline:
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            status, result = get_json(f"{base_url}/api/traces/{trace_id}")
+            status, result = get_json(f"{base_url}/api/traces/{trace_id}", timeout=min(8, remaining))
+            if time.monotonic() >= deadline:
+                last = "response arrived after deadline"
+                break
             traces = result.get("data") or []
             if status == 200 and traces and len(traces[0].get("spans", [])) >= count:
                 return traces[0]
             last = f"HTTP {status}, {len(traces[0]['spans']) if traces else 0} spans"
         except (URLError, TimeoutError, ValueError) as error:
             last = str(error)
-        time.sleep(0.5)
+        time.sleep(min(0.5, max(0, deadline - time.monotonic())))
     raise AssertionError(f"Jaeger trace {trace_id} incomplete after 30s: {last}")
 
 
