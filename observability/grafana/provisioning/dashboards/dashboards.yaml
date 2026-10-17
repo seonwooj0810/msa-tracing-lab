@@ -1,0 +1,7 @@
+apiVersion: 1
+
+providers:
+  - name: msa-tracing-lab
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards

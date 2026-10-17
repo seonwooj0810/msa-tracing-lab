@@ -1,0 +1,46 @@
+// 앱 컨테이너 로그만 수집해서 Loki로 보낸다. 라벨 `service`는 Tempo의 service.name과 값이 같다.
+discovery.docker "containers" {
+  host = "unix:///var/run/docker.sock"
+
+  filter {
+    name   = "label"
+    values = ["com.docker.compose.project=msa-tracing-lab"]
+  }
+}
+
+discovery.relabel "services" {
+  targets = discovery.docker.containers.targets
+
+  rule {
+    source_labels = ["__meta_docker_container_label_com_docker_compose_service"]
+    target_label  = "service"
+  }
+
+  rule {
+    source_labels = ["service"]
+    regex         = "bff|member-service|order-service|product-service"
+    action        = "keep"
+  }
+}
+
+loki.source.docker "app" {
+  host       = "unix:///var/run/docker.sock"
+  targets    = discovery.relabel.services.output
+  forward_to = [loki.process.app.receiver]
+}
+
+loki.process "app" {
+  // 날짜로 시작하는 줄이 새 로그다. 스택트레이스(Caused by 등)는 앞 로그에 이어 붙여 traceId를 유지한다.
+  stage.multiline {
+    firstline     = "^\\d{4}-\\d{2}-\\d{2}T"
+    max_wait_time = "3s"
+  }
+
+  forward_to = [loki.write.default.receiver]
+}
+
+loki.write "default" {
+  endpoint {
+    url = "http://loki:3100/loki/api/v1/push"
+  }
+}

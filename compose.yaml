@@ -3,16 +3,70 @@ name: msa-tracing-lab
 x-application: &application
   environment: &environment
     SERVER_PORT: 8080
-    OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
+    OTLP_TRACING_ENDPOINT: http://tempo:4318/v1/traces
     LOGGING_LEVEL_LAB_TRACING: ${TRACE_LOG_LEVEL:-INFO}
   init: true
 
 services:
-  jaeger:
-    image: cr.jaegertracing.io/jaegertracing/jaeger:2.17.0
+  tempo:
+    image: grafana/tempo:2.10.8
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./observability/tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+    depends_on:
+      prometheus:
+        condition: service_started
     ports:
-      - "127.0.0.1:${JAEGER_UI_PORT:-16686}:16686"
+      - "127.0.0.1:${TEMPO_PORT:-3200}:3200"
       - "127.0.0.1:${OTLP_PORT:-4318}:4318"
+
+  prometheus:
+    image: prom/prometheus:v3.13.4
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver
+      - --enable-feature=exemplar-storage
+    volumes:
+      - ./observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "127.0.0.1:${PROMETHEUS_PORT:-9090}:9090"
+
+  loki:
+    image: grafana/loki:3.6.18
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports:
+      - "127.0.0.1:${LOKI_PORT:-3100}:3100"
+
+  alloy:
+    image: grafana/alloy:v1.20.1
+    command:
+      - run
+      - --server.http.listen-addr=0.0.0.0:12345
+      - --storage.path=/var/lib/alloy/data
+      - /etc/alloy/config.alloy
+    volumes:
+      - ./observability/alloy/config.alloy:/etc/alloy/config.alloy:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      loki:
+        condition: service_started
+
+  grafana:
+    image: grafana/grafana:13.2.4
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /var/lib/grafana/dashboards/msa-flow.json
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "127.0.0.1:${GRAFANA_PORT:-3000}:3000"
+    depends_on:
+      - prometheus
+      - tempo
+      - loki
 
   product-service:
     <<: *application
@@ -23,7 +77,7 @@ services:
     ports:
       - "127.0.0.1:${PRODUCT_PORT:-8083}:8080"
     depends_on:
-      jaeger:
+      tempo:
         condition: service_started
 
   member-service:
@@ -35,7 +89,7 @@ services:
     ports:
       - "127.0.0.1:${MEMBER_PORT:-8081}:8080"
     depends_on:
-      jaeger:
+      tempo:
         condition: service_started
 
   order-service:

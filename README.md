@@ -2,7 +2,7 @@
 
 BFF가 `RestClient`로 여러 서비스를 **순차 호출**하고, Micrometer Tracing으로 W3C Trace Context를 전파하는 학습 프로젝트입니다.
 
-Java 21 · Spring Boot 3.5.16 · Gradle 8.14.3 · Spring MVC · Micrometer Tracing + OpenTelemetry · Jaeger 2.17.0
+Java 21 · Spring Boot 3.5.16 · Gradle 8.14.3 · Spring MVC · Micrometer Tracing + OpenTelemetry · Grafana 13 + Tempo 2.10 + Loki 3.6 + Prometheus 3 + Alloy
 
 ## 요청 흐름
 
@@ -17,8 +17,10 @@ Client
           → 주문 응답 대기
        → 회원 + 주문 결과 조합
 
-각 서비스 ── OTLP HTTP ──→ Jaeger :4318/v1/traces
-                            └─ 조회 UI :16686
+각 서비스 ── trace ──→ Tempo :4318 (OTLP HTTP) ─┐
+      ├─ metrics ←── Prometheus가 /actuator/prometheus 수집 ─┤
+      └─ 로그 ───→ Alloy(docker 로그 수집) → Loki ──────────┤
+                                                          └→ Grafana :3000 (trace · 로그 · 지표를 한 화면에서)
 ```
 
 데이터베이스 없이 회원 1, 주문 1000, 상품 100의 고정 데이터를 사용합니다.
@@ -60,18 +62,21 @@ curl -s http://localhost:8080/api/v1/members/1/mypage
 
 ```bash
 BFF_PORT=18080 MEMBER_PORT=18081 ORDER_PORT=18082 PRODUCT_PORT=18083 \
-JAEGER_UI_PORT=26686 OTLP_PORT=14318 docker compose up --build -d --wait
+GRAFANA_PORT=23000 TEMPO_PORT=23200 OTLP_PORT=14318 docker compose up --build -d --wait
 ```
 
-포트를 바꿨다면 이후 Compose 명령에도 같은 환경변수를 적용하세요. 검증 스크립트에는 `--bff-url http://localhost:18080 --jaeger-url http://localhost:26686`을 넘깁니다.
+포트를 바꿨다면 이후 Compose 명령에도 같은 환경변수를 적용하세요. 검증 스크립트에는 `--bff-url http://localhost:18080 --tempo-url http://localhost:23200`을 넘깁니다.
 
-## Jaeger에서 호출 흐름 확인
+## Grafana에서 호출 흐름 확인
 
-1. [Jaeger UI](http://localhost:16686)를 엽니다.
-2. 응답의 `traceId`를 UI의 trace ID 조회 입력창에서 검색합니다. 또는 `http://localhost:16686/trace/{traceId}`로 바로 이동합니다.
+[Grafana](http://localhost:3000)는 로그인 없이 열리며 첫 화면이 **MSA 요청 흐름** 대시보드입니다(서비스 맵, 최초 실패 지점, 서비스별 요청률·5xx·p95, 최근 WARN·ERROR 로그).
+
+1. 응답의 `traceId`를 복사합니다.
+2. Grafana 왼쪽 메뉴 **Explore → Tempo**에서 Query type을 TraceQL로 두고 traceId를 붙여넣습니다.
 3. HTTP server/client span을 펼쳐 서비스 이름, 부모 관계, 시작 시간, 소요 시간을 확인합니다.
+4. span을 선택해 **Logs for this span**을 누르면 같은 traceId의 서비스 로그(스택트레이스 포함)가 Loki에서 열립니다.
 
-span은 배치 전송되므로 응답 직후에는 몇 초 기다려야 할 수 있습니다. 기본 정상 요청은 **server span 4개 + client span 3개 = 7개**입니다.
+span은 배치 전송되므로 응답 직후에는 몇 초 기다려야 할 수 있습니다. 기본 정상 요청은 **server span 4개 + client span 3개 = 7개**입니다. `/actuator` 요청(헬스체크·메트릭 수집)은 trace에서 제외합니다.
 
 ```text
 bff SERVER
@@ -124,7 +129,7 @@ echo "$trace_id"
 [bff,traceId=...,spanId=...] Completed order-service memberId=1
 ```
 
-BFF의 호출 전후 로그는 BFF server span 안에서 기록됩니다. 실제 송신 client span의 ID는 Jaeger에서 확인합니다.
+BFF의 호출 전후 로그는 BFF server span 안에서 기록됩니다. 실제 송신 client span의 ID는 Grafana의 trace 화면에서 확인합니다.
 
 ```bash
 # 복사한 실제 traceId로 검색
@@ -148,7 +153,7 @@ python3 -m unittest discover -s scripts/tests -v
 python3 scripts/verify-trace.py
 ```
 
-실제 BFF 요청과 Jaeger 데이터를 검사합니다.
+실제 BFF 요청과 Tempo의 trace 데이터를 검사합니다.
 
 - 새 trace, 외부 W3C trace 유지, 잘못된 traceparent에서 새 trace 생성
 - 네 서비스의 7개 span, 고유 spanId와 동일 traceId
@@ -171,6 +176,14 @@ docker compose start product-service
 
 BFF 응답은 `502 Bad Gateway`와 `code`, `message`, `traceId`를 포함합니다. 하위 서비스의 4xx는 status와 body를 그대로 전달하고, 5xx와 연결 실패·타임아웃은 502로 변환합니다. 해당 trace에서는 상품 server span이 없고 주문 서비스의 상품 client span에 오류가 나타납니다. 주문 서비스와 BFF도 502로 끝납니다.
 
+### 장애 지점 찾기 (Grafana)
+
+1. 대시보드의 **최초 실패 지점** 패널을 봅니다. TraceQL `{ status = error } !<< { status = error }`는 에러 span 중 자신의 하위에 다른 에러가 없는, 즉 가장 깊은 에러 span만 고릅니다. 위 시나리오에서는 `order-service`의 `/api/v1/products/{productId}` client span이 나옵니다.
+2. 행을 클릭해 trace를 열고, 그 span의 **Logs for this span**으로 원인 예외(`ConnectException`)를 확인합니다.
+3. **서비스 맵**에서 `order-service → product-service` 간선에 실패가 몰리는지, **서비스별 5xx** 패널에서 bff와 order-service만 5xx가 오르는지 비교합니다.
+
+`!>>`(반대 방향)를 쓰면 최상단 에러인 `bff → order` client span이 나오므로 연산자 방향에 주의하세요.
+
 연결 타임아웃은 1초, 읽기 타임아웃은 3초이며 `CLIENT_CONNECT_TIMEOUT`, `CLIENT_READ_TIMEOUT`으로 변경할 수 있습니다. BFF와 주문 서비스의 읽기 제한이 같으므로 느린 상품 호출에서는 BFF 타임아웃이 주문 서비스의 오류 응답보다 먼저 발생할 수도 있습니다. 재시도와 부분 응답은 수행하지 않습니다.
 
 로컬 API의 지원하지 않는 회원·상품 ID는 404입니다. 회원 조회가 실패하면 주문 조회를 시작하지 않습니다.
@@ -181,7 +194,7 @@ BFF 응답은 `502 Bad Gateway`와 `code`, `message`, `traceId`를 포함합니�
 
 ```bash
 docker compose down
-docker compose up -d jaeger
+docker compose up -d tempo
 ./gradlew clean build
 ```
 
@@ -216,10 +229,12 @@ IntelliJ에서는 Gradle 프로젝트로 열고 각 모듈의 `*Application` mai
 docker compose down
 ```
 
-Jaeger는 학습용 메모리 저장소를 사용하므로 컨테이너 종료·재시작 시 수집된 trace가 삭제됩니다.
+Tempo·Loki·Prometheus는 학습용 임시 저장소를 사용하므로 컨테이너를 다시 만들면 수집된 trace·로그·지표가 삭제됩니다. Jaeger UI는 Grafana로 대체되어 더 이상 없습니다.
 
 ## 참고
 
 - [Spring Boot 3.5 Tracing](https://docs.spring.io/spring-boot/3.5/reference/actuator/tracing.html)
 - [W3C Trace Context](https://www.w3.org/TR/trace-context/)
-- [Jaeger 2.17 시작하기](https://www.jaegertracing.io/docs/2.17/getting-started/)
+- [Grafana Tempo](https://grafana.com/docs/tempo/latest/)
+- [Grafana Loki](https://grafana.com/docs/loki/latest/)
+- [Grafana Alloy](https://grafana.com/docs/alloy/latest/)

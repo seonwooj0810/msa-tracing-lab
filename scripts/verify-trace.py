@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Verify actual application responses and Jaeger traces using only the standard library."""
+"""Verify actual application responses and Tempo traces using only the standard library."""
 import argparse
+import base64
 import json
 import re
 import secrets
@@ -23,14 +24,26 @@ def get_json(url, headers=None, timeout=8):
         return error.code, json.load(error)
 
 
-def tags(span):
-    return {tag["key"]: tag["value"] for tag in span.get("tags", [])}
-
-
-def parent(span):
-    parents = [ref["spanID"] for ref in span.get("references", []) if ref["refType"] == "CHILD_OF"]
-    require(len(parents) <= 1, "Span has multiple CHILD_OF parents")
-    return parents[0] if parents else None
+def normalize(response):
+    """Flatten a Tempo /api/v2/traces response into spans with hex ids, service, kind, nanosecond times."""
+    spans = []
+    for resource_spans in response.get("trace", {}).get("resourceSpans", []):
+        service = next(a["value"]["stringValue"] for a in resource_spans["resource"]["attributes"]
+                       if a["key"] == "service.name")
+        for scope_spans in resource_spans.get("scopeSpans", []):
+            for span in scope_spans.get("spans", []):
+                spans.append({
+                    "traceID": base64.b64decode(span["traceId"]).hex(),
+                    "spanID": base64.b64decode(span["spanId"]).hex(),
+                    "parent": base64.b64decode(span["parentSpanId"]).hex() if span.get("parentSpanId") else None,
+                    "service": service,
+                    "kind": span["kind"].removeprefix("SPAN_KIND_").lower(),
+                    "start": int(span["startTimeUnixNano"]),
+                    "end": int(span["endTimeUnixNano"]),
+                    "error": span.get("status", {}).get("code") == "STATUS_CODE_ERROR",
+                    "attributes": {a["key"]: next(iter(a["value"].values())) for a in span.get("attributes", [])},
+                })
+    return spans
 
 
 def wait_for_trace(base_url, trace_id, count):
@@ -41,33 +54,28 @@ def wait_for_trace(base_url, trace_id, count):
         if remaining <= 0:
             break
         try:
-            status, result = get_json(f"{base_url}/api/traces/{trace_id}", timeout=min(8, remaining))
+            status, result = get_json(f"{base_url}/api/v2/traces/{trace_id}", timeout=min(8, remaining))
             if time.monotonic() >= deadline:
                 last = "response arrived after deadline"
                 break
-            traces = result.get("data") or []
-            if status == 200 and traces and len(traces[0].get("spans", [])) >= count:
-                return traces[0]
-            last = f"HTTP {status}, {len(traces[0]['spans']) if traces else 0} spans"
+            spans = normalize(result) if status == 200 else []
+            if len(spans) >= count:
+                return spans
+            last = f"HTTP {status}, {len(spans)} spans"
         except (URLError, TimeoutError, ValueError) as error:
             last = str(error)
         time.sleep(min(0.5, max(0, deadline - time.monotonic())))
-    raise AssertionError(f"Jaeger trace {trace_id} incomplete after 30s: {last}")
+    raise AssertionError(f"Tempo trace {trace_id} incomplete after 30s: {last}")
 
 
-def verify(trace, trace_id, failure=False, external_parent=None):
-    spans = trace["spans"]
+def verify(spans, trace_id, failure=False, external_parent=None):
     expected_count = 6 if failure else 7
     require(len(spans) == expected_count, f"Expected {expected_count} spans, got {len(spans)}")
     require(all(s["traceID"] == trace_id for s in spans), "Trace ID changed between services")
     require(len({s["spanID"] for s in spans}) == expected_count, "Span IDs are not unique")
-    processes = trace["processes"]
-
-    def service(span):
-        return processes[span["processID"]]["serviceName"]
 
     def only(service_name, kind):
-        found = [s for s in spans if service(s) == service_name and tags(s).get("span.kind") == kind]
+        found = [s for s in spans if s["service"] == service_name and s["kind"] == kind]
         require(len(found) == 1, f"Expected one {service_name} {kind} span, got {len(found)}")
         return found[0]
 
@@ -75,39 +83,38 @@ def verify(trace, trace_id, failure=False, external_parent=None):
     member = only("member-service", "server")
     order = only("order-service", "server")
     by_id = {s["spanID"]: s for s in spans}
-    require(parent(member) in by_id and parent(order) in by_id, "Missing downstream client parent")
-    member_client, order_client = by_id[parent(member)], by_id[parent(order)]
+    require(member["parent"] in by_id and order["parent"] in by_id, "Missing downstream client parent")
+    member_client, order_client = by_id[member["parent"]], by_id[order["parent"]]
     for client in (member_client, order_client):
-        require(service(client) == "bff" and tags(client).get("span.kind") == "client", "Wrong BFF client span")
-        require(parent(client) == bff["spanID"], "BFF client disconnected from root")
-    require(member_client["startTime"] + member_client["duration"] <= order_client["startTime"],
+        require(client["service"] == "bff" and client["kind"] == "client", "Wrong BFF client span")
+        require(client["parent"] == bff["spanID"], "BFF client disconnected from root")
+    require(member_client["end"] <= order_client["start"],
             "Order request started before member request completed")
     if external_parent:
-        require(parent(bff) == external_parent, "External parent span was not preserved")
+        require(bff["parent"] == external_parent, "External parent span was not preserved")
     else:
-        require(parent(bff) is None, "New trace unexpectedly has an external parent")
+        require(bff["parent"] is None, "New trace unexpectedly has an external parent")
 
     product_client = only("order-service", "client")
-    require(parent(product_client) == order["spanID"], "Product client disconnected from order server")
+    require(product_client["parent"] == order["spanID"], "Product client disconnected from order server")
     if failure:
-        require(tags(product_client).get("error") is True, "Failed product client has no error tag")
+        require(product_client["error"], "Failed product client has no error status")
         for server in (bff, order):
-            attributes = tags(server)
-            status = attributes.get("status", attributes.get("http.status_code", attributes.get("http.response.status_code")))
-            require(int(status or 0) == 502, f"Expected 502 span on {service(server)}, got {status}")
+            status = server["attributes"].get("status", server["attributes"].get("http.response.status_code"))
+            require(int(status or 0) == 502, f"Expected 502 span on {server['service']}, got {status}")
     else:
         product = only("product-service", "server")
-        require(parent(product) == product_client["spanID"], "Product server disconnected from client")
+        require(product["parent"] == product_client["spanID"], "Product server disconnected from client")
     return spans
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bff-url", default="http://localhost:8080")
-    parser.add_argument("--jaeger-url", default="http://localhost:16686")
+    parser.add_argument("--tempo-url", default="http://localhost:3200")
     parser.add_argument("--expect-error", action="store_true", help="Run after stopping product-service")
     args = parser.parse_args()
-    bff_url, jaeger_url = args.bff_url.rstrip("/"), args.jaeger_url.rstrip("/")
+    bff_url, tempo_url = args.bff_url.rstrip("/"), args.tempo_url.rstrip("/")
     scenarios = [("new trace", {}, None, None)]
     if not args.expect_error:
         trace_id, parent_id = secrets.token_hex(16), secrets.token_hex(8)
@@ -128,10 +135,10 @@ def main():
             require(payload.get("member") == {"id": 1, "name": "선우"}, "Wrong member payload")
             require(payload.get("orders") == [{"id": 1000, "memberId": 1, "product": {
                 "id": 100, "name": "MSA 학습 도서", "price": 30000}, "quantity": 1}], "Wrong orders payload")
-        trace = wait_for_trace(jaeger_url, trace_id, 6 if args.expect_error else 7)
+        trace = wait_for_trace(tempo_url, trace_id, 6 if args.expect_error else 7)
         spans = verify(trace, trace_id, args.expect_error, external_parent)
         print(f"PASS {name}: {len(spans)} spans, traceId={trace_id}")
-        print(f"     {jaeger_url}/trace/{trace_id}")
+        print(f"     {tempo_url}/api/v2/traces/{trace_id}")
     print("All trace checks passed.")
 
 
