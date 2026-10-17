@@ -20,3 +20,10 @@ logging:
   include-application-name: false
   pattern:
     correlation: "[${spring.application.name},traceId=%X{traceId:-},spanId=%X{spanId:-}] "
+clients:
+  connect-timeout: ${CLIENT_CONNECT_TIMEOUT:1s}
+  read-timeout: ${CLIENT_READ_TIMEOUT:3s}
+  member:
+    base-url: ${MEMBER_SERVICE_URL:http://localhost:8081}
+  order:
+    base-url: ${ORDER_SERVICE_URL:http://localhost:8082}
