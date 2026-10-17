@@ -29,6 +29,9 @@ class OrderControllerTest {
     static HttpServer server() {
         try {
             var server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+            server.setExecutor(java.util.concurrent.Executors.newCachedThreadPool(r -> {
+                var thread = new Thread(r); thread.setDaemon(true); return thread;
+            }));
             server.createContext("/", exchange -> {
                 calls.incrementAndGet();
                 requestedPath = exchange.getRequestURI().toString();

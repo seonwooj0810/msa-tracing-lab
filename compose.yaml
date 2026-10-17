@@ -1,0 +1,72 @@
+name: msa-tracing-lab
+
+x-application: &application
+  environment: &environment
+    SERVER_PORT: 8080
+    OTLP_TRACING_ENDPOINT: http://jaeger:4318/v1/traces
+    LOGGING_LEVEL_LAB_TRACING: ${TRACE_LOG_LEVEL:-INFO}
+  init: true
+
+services:
+  jaeger:
+    image: cr.jaegertracing.io/jaegertracing/jaeger:2.17.0
+    ports:
+      - "127.0.0.1:${JAEGER_UI_PORT:-16686}:16686"
+      - "127.0.0.1:${OTLP_PORT:-4318}:4318"
+
+  product-service:
+    <<: *application
+    build:
+      context: .
+      args:
+        MODULE: product-service
+    ports:
+      - "127.0.0.1:${PRODUCT_PORT:-8083}:8080"
+    depends_on:
+      jaeger:
+        condition: service_started
+
+  member-service:
+    <<: *application
+    build:
+      context: .
+      args:
+        MODULE: member-service
+    ports:
+      - "127.0.0.1:${MEMBER_PORT:-8081}:8080"
+    depends_on:
+      jaeger:
+        condition: service_started
+
+  order-service:
+    <<: *application
+    build:
+      context: .
+      args:
+        MODULE: order-service
+    environment:
+      <<: *environment
+      PRODUCT_SERVICE_URL: http://product-service:8080
+    ports:
+      - "127.0.0.1:${ORDER_PORT:-8082}:8080"
+    depends_on:
+      product-service:
+        condition: service_healthy
+
+  bff:
+    <<: *application
+    build:
+      context: .
+      args:
+        MODULE: bff
+    environment:
+      <<: *environment
+      MEMBER_SERVICE_URL: http://member-service:8080
+      ORDER_SERVICE_URL: http://order-service:8080
+    ports:
+      - "127.0.0.1:${BFF_PORT:-8080}:8080"
+    depends_on:
+      member-service:
+        condition: service_healthy
+      order-service:
+        condition: service_healthy

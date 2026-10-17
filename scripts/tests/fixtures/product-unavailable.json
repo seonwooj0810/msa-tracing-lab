@@ -1,0 +1,228 @@
+{
+  "traceID": "7964c0caf6a03bd036868758fb7b3281",
+  "spans": [
+    {
+      "traceID": "7964c0caf6a03bd036868758fb7b3281",
+      "spanID": "a37fd6adfe4cb93c",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "7964c0caf6a03bd036868758fb7b3281",
+          "spanID": "75ac0556afc7f44f"
+        }
+      ],
+      "startTime": 1792224263935557,
+      "duration": 1127423,
+      "tags": [
+        {
+          "key": "status",
+          "type": "string",
+          "value": "502"
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "client"
+        },
+        {
+          "key": "error",
+          "type": "bool",
+          "value": true
+        }
+      ],
+      "processID": "p1"
+    },
+    {
+      "traceID": "7964c0caf6a03bd036868758fb7b3281",
+      "spanID": "75ac0556afc7f44f",
+      "references": [],
+      "startTime": 1792224263891142,
+      "duration": 1206562,
+      "tags": [
+        {
+          "key": "status",
+          "type": "string",
+          "value": "502"
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "server"
+        }
+      ],
+      "processID": "p1"
+    },
+    {
+      "traceID": "7964c0caf6a03bd036868758fb7b3281",
+      "spanID": "fa7689037e456d2e",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "7964c0caf6a03bd036868758fb7b3281",
+          "spanID": "75ac0556afc7f44f"
+        }
+      ],
+      "startTime": 1792224263899511,
+      "duration": 32559,
+      "tags": [
+        {
+          "key": "status",
+          "type": "string",
+          "value": "200"
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "client"
+        }
+      ],
+      "processID": "p1"
+    },
+    {
+      "traceID": "7964c0caf6a03bd036868758fb7b3281",
+      "spanID": "9e7fe03a9eb7ada9",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "7964c0caf6a03bd036868758fb7b3281",
+          "spanID": "fa7689037e456d2e"
+        }
+      ],
+      "startTime": 1792224263916500,
+      "duration": 11673,
+      "tags": [
+        {
+          "key": "status",
+          "type": "string",
+          "value": "200"
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "server"
+        }
+      ],
+      "processID": "p2"
+    },
+    {
+      "traceID": "7964c0caf6a03bd036868758fb7b3281",
+      "spanID": "d7e552b3a0971685",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "7964c0caf6a03bd036868758fb7b3281",
+          "spanID": "a37fd6adfe4cb93c"
+        }
+      ],
+      "startTime": 1792224263945222,
+      "duration": 1086954,
+      "tags": [
+        {
+          "key": "status",
+          "type": "string",
+          "value": "502"
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "server"
+        }
+      ],
+      "processID": "p3"
+    },
+    {
+      "traceID": "7964c0caf6a03bd036868758fb7b3281",
+      "spanID": "f0b2001fa16ace94",
+      "references": [
+        {
+          "refType": "CHILD_OF",
+          "traceID": "7964c0caf6a03bd036868758fb7b3281",
+          "spanID": "d7e552b3a0971685"
+        }
+      ],
+      "startTime": 1792224263956402,
+      "duration": 1037742,
+      "tags": [
+        {
+          "key": "status",
+          "type": "string",
+          "value": "CLIENT_ERROR"
+        },
+        {
+          "key": "span.kind",
+          "type": "string",
+          "value": "client"
+        },
+        {
+          "key": "error",
+          "type": "bool",
+          "value": true
+        }
+      ],
+      "processID": "p3"
+    }
+  ],
+  "processes": {
+    "p1": {
+      "serviceName": "bff",
+      "tags": [
+        {
+          "key": "telemetry.sdk.language",
+          "type": "string",
+          "value": "java"
+        },
+        {
+          "key": "telemetry.sdk.name",
+          "type": "string",
+          "value": "opentelemetry"
+        },
+        {
+          "key": "telemetry.sdk.version",
+          "type": "string",
+          "value": "1.49.0"
+        }
+      ]
+    },
+    "p2": {
+      "serviceName": "member-service",
+      "tags": [
+        {
+          "key": "telemetry.sdk.language",
+          "type": "string",
+          "value": "java"
+        },
+        {
+          "key": "telemetry.sdk.name",
+          "type": "string",
+          "value": "opentelemetry"
+        },
+        {
+          "key": "telemetry.sdk.version",
+          "type": "string",
+          "value": "1.49.0"
+        }
+      ]
+    },
+    "p3": {
+      "serviceName": "order-service",
+      "tags": [
+        {
+          "key": "telemetry.sdk.language",
+          "type": "string",
+          "value": "java"
+        },
+        {
+          "key": "telemetry.sdk.name",
+          "type": "string",
+          "value": "opentelemetry"
+        },
+        {
+          "key": "telemetry.sdk.version",
+          "type": "string",
+          "value": "1.49.0"
+        }
+      ]
+    }
+  },
+  "warnings": null
+}
