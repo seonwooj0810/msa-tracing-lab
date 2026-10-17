@@ -116,15 +116,17 @@ def main():
             ("malformed W3C context", {"traceparent": "invalid-traceparent"}, None, None),
         ]
     for name, headers, expected_trace_id, external_parent in scenarios:
-        status, body = get_json(f"{bff_url}/api/mypage/1", headers)
+        status, body = get_json(f"{bff_url}/api/v1/members/1/mypage", headers)
         require(status == (502 if args.expect_error else 200), f"{name}: unexpected HTTP {status}: {body}")
-        trace_id = body.get("traceId", "")
+        payload = body if args.expect_error else body.get("data", {})
+        trace_id = payload.get("traceId", "")
         require(re.fullmatch(r"[0-9a-f]{32}", trace_id) and int(trace_id, 16) != 0, "Invalid response traceId")
         if expected_trace_id:
             require(trace_id == expected_trace_id, "External traceId was replaced")
         if not args.expect_error:
-            require(body.get("member") == {"id": 1, "name": "선우"}, "Wrong member payload")
-            require(body.get("orders") == [{"id": 1000, "memberId": 1, "product": {
+            require(body.get("success") is True, "Response is not wrapped in ApiResult")
+            require(payload.get("member") == {"id": 1, "name": "선우"}, "Wrong member payload")
+            require(payload.get("orders") == [{"id": 1000, "memberId": 1, "product": {
                 "id": 100, "name": "MSA 학습 도서", "price": 30000}, "quantity": 1}], "Wrong orders payload")
         trace = wait_for_trace(jaeger_url, trace_id, 6 if args.expect_error else 7)
         spans = verify(trace, trace_id, args.expect_error, external_parent)

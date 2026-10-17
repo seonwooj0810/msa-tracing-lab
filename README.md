@@ -6,7 +6,7 @@ Java 21 · Spring Boot 3.5.16 · Gradle 8.14.3 · Spring MVC · Micrometer Traci
 
 ## 요청 흐름
 
-`GET /api/mypage/1`을 호출하면 BFF가 회원 조회를 완료한 뒤 주문을 조회합니다. 주문 서비스는 상품 조회를 완료한 뒤 응답합니다.
+`GET /api/v1/members/1/mypage`을 호출하면 BFF가 회원 조회를 완료한 뒤 주문을 조회합니다. 주문 서비스는 상품 조회를 완료한 뒤 응답합니다.
 
 ```text
 Client
@@ -29,25 +29,30 @@ Docker와 Docker Compose가 필요합니다. Java는 이미지 내부에서 빌�
 
 ```bash
 docker compose up --build -d --wait
-curl -s http://localhost:8080/api/mypage/1
+curl -s http://localhost:8080/api/v1/members/1/mypage
 ```
 
 최초 실행은 JDK 이미지와 Gradle 의존성을 내려받아 시간이 걸립니다. 상태는 `docker compose ps`, 로그는 `docker compose logs -f`로 확인합니다.
 
 응답 예시에서 `traceId`는 요청마다 바뀝니다.
 
+모든 성공 응답은 `ApiResult`(`success`, `data`)로 감싸집니다.
+
 ```json
 {
-  "traceId": "32자리 16진수 ID",
-  "member": { "id": 1, "name": "선우" },
-  "orders": [
-    {
-      "id": 1000,
-      "memberId": 1,
-      "product": { "id": 100, "name": "MSA 학습 도서", "price": 30000 },
-      "quantity": 1
-    }
-  ]
+  "success": true,
+  "data": {
+    "traceId": "32자리 16진수 ID",
+    "member": { "id": 1, "name": "선우" },
+    "orders": [
+      {
+        "id": 1000,
+        "memberId": 1,
+        "product": { "id": 100, "name": "MSA 학습 도서", "price": 30000 },
+        "quantity": 1
+      }
+    ]
+  }
 }
 ```
 
@@ -98,7 +103,7 @@ traceparent: 00-{traceId 32자리}-{parentId 16자리}-01
 
 ```bash
 trace_id=$(python3 -c 'import secrets; print(secrets.token_hex(16))')
-curl -s http://localhost:8080/api/mypage/1 \
+curl -s http://localhost:8080/api/v1/members/1/mypage \
   -H "traceparent: 00-${trace_id}-0123456789abcdef-01"
 echo "$trace_id"
 ```
@@ -127,7 +132,7 @@ docker compose logs --no-color | rg '복사한_traceId'
 
 # 수신 traceparent 헤더를 DEBUG 로그로 확인
 TRACE_LOG_LEVEL=DEBUG docker compose up -d --wait
-curl -s http://localhost:8080/api/mypage/1
+curl -s http://localhost:8080/api/v1/members/1/mypage
 docker compose logs --no-color | rg 'Incoming|Calling|Completed'
 ```
 
@@ -157,14 +162,14 @@ unit/integration 테스트에서는 로컬 HTTP stub으로 회원 응답을 지�
 
 ```bash
 docker compose stop product-service
-curl -i http://localhost:8080/api/mypage/1
+curl -i http://localhost:8080/api/v1/members/1/mypage
 python3 scripts/verify-trace.py --expect-error
 
 # 복구
 docker compose start product-service
 ```
 
-BFF 응답은 `502 Bad Gateway`와 `traceId`, `message`를 포함합니다. 해당 trace에서는 상품 server span이 없고 주문 서비스의 상품 client span에 오류가 나타납니다. 주문 서비스와 BFF도 502로 끝납니다.
+BFF 응답은 `502 Bad Gateway`와 `code`, `message`, `traceId`를 포함합니다. 하위 서비스의 4xx는 status와 body를 그대로 전달하고, 5xx와 연결 실패·타임아웃은 502로 변환합니다. 해당 trace에서는 상품 server span이 없고 주문 서비스의 상품 client span에 오류가 나타납니다. 주문 서비스와 BFF도 502로 끝납니다.
 
 연결 타임아웃은 1초, 읽기 타임아웃은 3초이며 `CLIENT_CONNECT_TIMEOUT`, `CLIENT_READ_TIMEOUT`으로 변경할 수 있습니다. BFF와 주문 서비스의 읽기 제한이 같으므로 느린 상품 호출에서는 BFF 타임아웃이 주문 서비스의 오류 응답보다 먼저 발생할 수도 있습니다. 재시도와 부분 응답은 수행하지 않습니다.
 
@@ -195,11 +200,12 @@ IntelliJ에서는 Gradle 프로젝트로 열고 각 모듈의 `*Application` mai
 
 | 파일 | 학습 포인트 |
 |---|---|
-| `bff/.../MypageService.java` | 회원 → 주문의 동기 순차 호출과 응답 조합 |
-| `bff/.../DownstreamClients.java` | 주입받은 RestClient.Builder로 HTTP 계측 유지 |
-| `order-service/.../ProductClient.java` | 다운스트림에서 다시 다른 서비스로 trace 전파 |
+| `bff/.../mypage/application/MypageFacadeService.java` | 회원 → 주문의 동기 순차 호출과 응답 조합 |
+| `bff/.../config/RestClientConfig.java` | 주입받은 RestClient.Builder로 `@HttpExchange` 클라이언트를 만들어 HTTP 계측 유지 |
+| `order-service/.../order/infrastructure/product/ProductClient.java` | 다운스트림에서 다시 다른 서비스로 trace 전파 |
+| 각 모듈 `common/error/GlobalExceptionHandler.java` | `CustomException`·하위 서비스 오류를 `ErrorResponse`(traceId 포함)로 변환 |
 | 각 모듈 `application.yml` | W3C, 100% 샘플링, OTLP endpoint, 로그 correlation |
-| 각 모듈 `TraceLogFilter.java` | 현재 server span 안에서 수신 헤더 확인 |
+| 각 모듈 `config/TraceLogFilter.java` | 현재 server span 안에서 수신 헤더 확인 |
 | `scripts/verify-trace.py` | 실제 trace의 관계와 시간 검증 |
 
 `RestClient.create()` 또는 직접 생성한 Builder로 바꾸면 Spring Boot가 제공하는 자동 계측 설정이 빠질 수 있습니다. 현재 코드는 **주입받은 Builder를 clone**하여 대상 URL과 timeout만 설정합니다. traceparent나 MDC의 traceId를 수동으로 복사하지 않습니다.
