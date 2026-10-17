@@ -1,0 +1,22 @@
+spring:
+  application:
+    name: member-service
+server:
+  port: ${SERVER_PORT:8081}
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  tracing:
+    sampling:
+      probability: 1.0
+    propagation:
+      type: w3c
+  otlp:
+    tracing:
+      endpoint: ${OTLP_TRACING_ENDPOINT:http://localhost:4318/v1/traces}
+logging:
+  include-application-name: false
+  pattern:
+    correlation: "[${spring.application.name},traceId=%X{traceId:-},spanId=%X{spanId:-}] "

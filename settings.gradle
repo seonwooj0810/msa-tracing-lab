@@ -1,0 +1,2 @@
+rootProject.name = 'msa-tracing-lab'
+include 'bff', 'member-service', 'order-service', 'product-service'

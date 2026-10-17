@@ -1,0 +1,28 @@
+plugins {
+    id 'org.springframework.boot' version '3.5.16' apply false
+}
+
+subprojects {
+    apply plugin: 'java'
+    apply plugin: 'org.springframework.boot'
+    group = 'lab.tracing'
+    version = '0.1.0'
+    java { toolchain { languageVersion = JavaLanguageVersion.of(21) } }
+    repositories { mavenCentral() }
+    dependencies {
+        implementation platform('org.springframework.boot:spring-boot-dependencies:3.5.16')
+        implementation 'org.springframework.boot:spring-boot-starter-web'
+        implementation 'org.springframework.boot:spring-boot-starter-actuator'
+        implementation 'io.micrometer:micrometer-tracing-bridge-otel'
+        implementation 'io.opentelemetry:opentelemetry-exporter-otlp'
+        testImplementation 'org.springframework.boot:spring-boot-starter-test'
+        testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+    }
+    tasks.withType(JavaCompile).configureEach {
+        options.encoding = 'UTF-8'
+        options.compilerArgs += '-parameters'
+    }
+    tasks.named('test') { useJUnitPlatform() }
+    tasks.named('jar') { enabled = false }
+    tasks.named('bootJar') { archiveFileName = 'app.jar' }
+}
